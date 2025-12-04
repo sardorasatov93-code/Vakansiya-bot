@@ -43,7 +43,7 @@ vacancies = load_data()
 
 all_tumans = [ 
     "Arnasoy", "Baxmal", "Do'stlik", "G'allaorol", "Jizzax shahar",
-    "Jizzax tuman", "Zafarobod", "Zarbdor", "Zomin", "Mirzacho'l",
+    "Sharof Rashidov", "Zafarobod", "Zarbdor", "Zomin", "Mirzacho'l",
     "Paxtakor", "Forish", "Yangiobod"
 ] 
 
@@ -395,4 +395,5 @@ async def list_tumans(callback: types.CallbackQuery):
 
 if __name__ == "__main__":
     asyncio.run(dp.start_polling(bot)) 
+
     
