@@ -42,7 +42,7 @@ def save_data(data):
 vacancies = load_data() 
 
 all_tumans = [ 
-    "Arnasoy", "Baxmal tumani", "Do'stlik", "G'allaorol", "Jizzax shahar",
+    "Arnasoy tumani", "Baxmal tumani", "Do'stlik", "G'allaorol", "Jizzax shahar",
     "Sharof Rashidov", "Zafarobod", "Zarbdor", "Zomin", "Mirzacho'l",
     "Paxtakor", "Forish", "Yangiobod"
 ] 
@@ -397,4 +397,5 @@ if __name__ == "__main__":
     asyncio.run(dp.start_polling(bot)) 
 
     
+
 
