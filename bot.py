@@ -23,6 +23,13 @@ except json.JSONDecodeError:
 API_TOKEN = config["token"]
 ADMIN_ID = config["admin_id"] # String formatda bo'lishi kerak
 
+# ADMIN_ID ni integerga o'tkazish, F.in_ filtrida foydalanish uchun
+try:
+    ADMIN_ID_INT = int(ADMIN_ID)
+except ValueError:
+    print("Xatolik: 'admin_id' qiymati config.json faylida butun son (integer) bo'lishi kerak.")
+    exit()
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -31,7 +38,6 @@ dp = Dispatcher(storage=MemoryStorage())
 class Form(StatesGroup):
     waiting_for_name = State()
     waiting_for_phone = State()
-    # Hujjat State'lari
     waiting_for_diploma = State() 
     waiting_for_reference_letter = State() 
     waiting_for_manager_cert = State() 
@@ -436,18 +442,17 @@ async def process_passport(message: types.Message, state: FSMContext):
         # Hamma hujjatlarni bitta MediaGroup qilib yuboramiz
         await bot.send_media_group(ADMIN_ID, media=media_group)
         
-        # Foydalanuvchiga TASDIQLASH xabari (Muammo yechimi shu yerda)
+        # Foydalanuvchiga TASDIQLASH xabari 
         await message.answer("✅ Arizangiz va hujjatlaringiz qabul qilindi! **Siz bilan 48 soat ichida admin aloqaga chiqadi.** E'tiboringiz uchun rahmat.", 
                              reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/start")]], resize_keyboard=True, one_time_keyboard=True))
         await state.clear()
     except Exception as e:
-        await message.answer(f"❌ Xatolik yuz berdi. Admin xabar yuborishda muammo: {e}. Iltimos, qayta urinib ko'ring yoki admin bilan bog'laning.")
+        # Xatolik yuz bersa, foydalanuvchiga xabar berish
+        await message.answer(f"❌ Xatolik yuz berdi. Arizani Admin'ga yuborishda muammo: {e}. Iltimos, qayta urinib ko'ring yoki admin bilan bog'laning.")
         await state.clear()
 
 
 # --- Orqaga Qaytish Funksiyalari ---
-
-# ... (Orqaga qaytish funksiyalari o'zgarishsiz qoladi, yuqoridagi kodda mavjud) ...
 
 @dp.callback_query(F.data == "back_to_name")
 async def back_to_name(callback: types.CallbackQuery, state: FSMContext):
@@ -455,7 +460,6 @@ async def back_to_name(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     tuman = data.get("selected_tuman")
     
-    # Orqaga qaytish: Ish tanlash bosqichiga
     kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"user_tuman_{tuman}")) 
 
     await callback.message.edit_text(
@@ -484,7 +488,6 @@ async def back_to_phone(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "back_to_diploma")
 async def back_to_diploma(callback: types.CallbackQuery, state: FSMContext):
     """Diplom kiritish bosqichiga qaytish."""
-    # Orqaga qaytish: Telefon kiritish bosqichiga
     kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_phone"))
 
     await callback.message.edit_text(
@@ -499,7 +502,6 @@ async def back_to_diploma(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "back_to_reference")
 async def back_to_reference(callback: types.CallbackQuery, state: FSMContext):
     """Ma'lumotnoma kiritish bosqichiga qaytish."""
-    # Orqaga qaytish: Diplom kiritish bosqichiga
     kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_diploma"))
 
     await callback.message.edit_text(
@@ -513,7 +515,6 @@ async def back_to_reference(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "back_to_manager_cert")
 async def back_to_manager_cert(callback: types.CallbackQuery, state: FSMContext):
     """Menejerlik sertifikati kiritish bosqichiga qaytish."""
-    # Orqaga qaytish: Ma'lumotnoma kiritish bosqichiga
     kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_reference"))
 
     await callback.message.edit_text(
@@ -528,7 +529,7 @@ async def back_to_manager_cert(callback: types.CallbackQuery, state: FSMContext)
 # --- Admin Panel Funksiyalari (Tuzatilgan) ---
 
 # /admin buyrug'ini faqat Admin uchun ishlashini ta'minlash
-@dp.message(F.text == "/admin", F.from_user.id.in_({int(ADMIN_ID)}))
+@dp.message(F.text == "/admin", F.from_user.id.in_({ADMIN_ID_INT}))
 async def admin_panel(message: types.Message, state: FSMContext):
     await state.clear() 
 
@@ -540,7 +541,7 @@ async def admin_panel(message: types.Message, state: FSMContext):
     await message.answer("Admin paneliga xush kelibsiz:", reply_markup=kb)
 
 # Admin bo'lmagan shaxs /admin deb yozsa
-@dp.message(F.text == "/admin", ~F.from_user.id.in_({int(ADMIN_ID)}))
+@dp.message(F.text == "/admin", ~F.from_user.id.in_({ADMIN_ID_INT}))
 async def not_admin_handler(message: types.Message):
     await message.answer("Siz admin emassiz!")
 
@@ -757,5 +758,6 @@ async def do_clear_tuman_jobs(callback: types.CallbackQuery, state: FSMContext):
 
 
 if __name__ == "__main__":
-    # Botni ishga tushirish
+    # Botni ishga tushirish (Long Polling rejimida)
+    # Serverda bot doimiy ishlashi uchun uni 'screen' yoki 'tmux' ostida ishlatishingiz kerak.
     asyncio.run(dp.start_polling(bot))
