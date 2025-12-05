@@ -10,7 +10,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # --- Konfiguratsiya va Global O'zgaruvchilar ---
 
 # Konfiguratsiya faylini o'qish
-# Iltimos, "config.json" fayli mavjudligiga va ichida "token" hamda "admin_id" kalitlari borligiga ishonch hosil qiling.
 try:
     with open("config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
@@ -22,7 +21,7 @@ except json.JSONDecodeError:
     exit()
 
 API_TOKEN = config["token"]
-ADMIN_ID = config["admin_id"]
+ADMIN_ID = config["admin_id"] # String formatda bo'lishi kerak
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -33,9 +32,9 @@ class Form(StatesGroup):
     waiting_for_name = State()
     waiting_for_phone = State()
     # Hujjat State'lari
-    waiting_for_diploma = State() # 1-hujjat: Diplom nusxasi
-    waiting_for_reference_letter = State() # 2-hujjat: Ma'lumotnoma
-    waiting_for_manager_cert = State() # 3-hujjat: Menejerlik sertifikati
+    waiting_for_diploma = State() 
+    waiting_for_reference_letter = State() 
+    waiting_for_manager_cert = State() 
     waiting_for_passport_info = State()
     
     # Admin State'lari
@@ -53,7 +52,6 @@ def load_data():
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except json.JSONDecodeError:
-            # Agar fayl buzilgan bo'lsa, bo'sh lug'at qaytarish
             return {}
     return {}
 
@@ -109,6 +107,7 @@ ALLOWED_MIME_TYPES = [
     'application/x-zip-compressed',
     'application/x-rar-compressed'
 ]
+
 # --- Umumiy Funksiyalar ---
 
 def get_back_buttons(back_callback=None):
@@ -120,6 +119,12 @@ def get_back_buttons(back_callback=None):
     buttons.append(InlineKeyboardButton(text="🏠 Bosh sahifa", callback_data="go_to_start"))
     
     return [buttons]
+    
+# Admin tekshiruvi uchun yordamchi funksiya
+def is_admin(user_id):
+    """Foydalanuvchi Admin ID ga mos kelishini tekshiradi."""
+    return str(user_id) == str(ADMIN_ID)
+
 
 # --- Foydalanuvchi Qo'llanmalari ---
 
@@ -127,8 +132,8 @@ def get_back_buttons(back_callback=None):
 async def start(message: types.Message, state: FSMContext):
     await state.clear()
     
-    # Admin tekshiruvi
-    if str(message.from_user.id) == str(ADMIN_ID):
+    # Admin tekshiruvi: Agar Admin bo'lsa, tezkor xabar berish
+    if is_admin(message.from_user.id):
         await message.answer("Salom Admin! Ish joylarini boshqarish uchun /admin yozing.")
         return
 
@@ -161,7 +166,7 @@ async def start(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "go_to_start")
 async def go_to_start_handler(callback: types.CallbackQuery, state: FSMContext):
     """Bosh sahifaga (start) qaytish."""
-    # Start funksiyasi edit_text'ni qo'llab-quvvatlamaydi, shuning uchun xabarni o'chirib, yangisini yuboramiz.
+    # Xabarni o'chirib, yangisini yuboramiz.
     await callback.message.delete()
     await start(callback.message, state)
     await callback.answer()
@@ -244,6 +249,7 @@ async def process_name(message: types.Message, state: FSMContext):
         
     await state.update_data(name=message.text)
     
+    # Orqaga qaytish: F.I.Sh. kiritish bosqichiga (reply tugma orqali mumkin emas, shuning uchun bosh sahifa qoldiriladi)
     kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Telefon raqamni yuborish", request_contact=True)],
@@ -430,7 +436,7 @@ async def process_passport(message: types.Message, state: FSMContext):
         # Hamma hujjatlarni bitta MediaGroup qilib yuboramiz
         await bot.send_media_group(ADMIN_ID, media=media_group)
         
-        # Foydalanuvchiga tasdiqlash xabari
+        # Foydalanuvchiga TASDIQLASH xabari (Muammo yechimi shu yerda)
         await message.answer("✅ Arizangiz va hujjatlaringiz qabul qilindi! **Siz bilan 48 soat ichida admin aloqaga chiqadi.** E'tiboringiz uchun rahmat.", 
                              reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/start")]], resize_keyboard=True, one_time_keyboard=True))
         await state.clear()
@@ -440,6 +446,8 @@ async def process_passport(message: types.Message, state: FSMContext):
 
 
 # --- Orqaga Qaytish Funksiyalari ---
+
+# ... (Orqaga qaytish funksiyalari o'zgarishsiz qoladi, yuqoridagi kodda mavjud) ...
 
 @dp.callback_query(F.data == "back_to_name")
 async def back_to_name(callback: types.CallbackQuery, state: FSMContext):
@@ -516,15 +524,12 @@ async def back_to_manager_cert(callback: types.CallbackQuery, state: FSMContext)
     await state.set_state(Form.waiting_for_manager_cert)
     await callback.answer()
 
-# --- Admin Panel Funksiyalari ---
 
-@dp.message(F.text == "/admin")
+# --- Admin Panel Funksiyalari (Tuzatilgan) ---
+
+# /admin buyrug'ini faqat Admin uchun ishlashini ta'minlash
+@dp.message(F.text == "/admin", F.from_user.id.in_({int(ADMIN_ID)}))
 async def admin_panel(message: types.Message, state: FSMContext):
-    """Admin panel menyusini ko'rsatish."""
-    if str(message.from_user.id) != str(ADMIN_ID):
-        await message.answer("Siz admin emassiz!")
-        return
-        
     await state.clear() 
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -534,8 +539,38 @@ async def admin_panel(message: types.Message, state: FSMContext):
     ])
     await message.answer("Admin paneliga xush kelibsiz:", reply_markup=kb)
 
+# Admin bo'lmagan shaxs /admin deb yozsa
+@dp.message(F.text == "/admin", ~F.from_user.id.in_({int(ADMIN_ID)}))
+async def not_admin_handler(message: types.Message):
+    await message.answer("Siz admin emassiz!")
+
+
+# go_to_admin_panel_handler callback funksiyasini to'g'rilash
+@dp.callback_query(F.data == "go_to_admin_panel")
+async def go_to_admin_panel_handler(callback: types.CallbackQuery, state: FSMContext):
+    # Callback orqali kelganda Admin ekanligini tekshirish
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Siz admin emassiz!")
+        return
+
+    # Admin bo'lsa, xabarni o'zgartirib Admin paneliga o'tamiz
+    await state.clear() 
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Ish joy qo'shish", callback_data="add_job")],
+        [InlineKeyboardButton(text="📜 Mavjud ish joylari ro'yxati", callback_data="list_tumans")],
+        [InlineKeyboardButton(text="🗑️ Tuman ish joylarini tozalash", callback_data="clear_tuman_jobs")] 
+    ])
+    
+    # Xabarni edit qilamiz
+    await callback.message.edit_text("Admin paneliga xush kelibsiz:", reply_markup=kb)
+    await callback.answer()
+
 @dp.callback_query(F.data == "add_job")
 async def add_job(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Siz admin emassiz!")
+        return
+        
     """Ish joyi qo'shish uchun tumanni tanlash."""
     keyboard_buttons = []
     row = []
@@ -555,6 +590,10 @@ async def add_job(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("admin_tuman_"))
 async def admin_tuman_selected(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Siz admin emassiz!")
+        return
+        
     """Tuman tanlanganda ish joyi nomini kiritishni so'rash."""
     tuman = callback.data.replace("admin_tuman_", "")
     await state.update_data(tuman=tuman)
@@ -569,6 +608,10 @@ async def admin_tuman_selected(callback: types.CallbackQuery, state: FSMContext)
 
 @dp.message(Form.admin_add_jobs)
 async def admin_add_jobs_message(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Siz admin emassiz!")
+        return
+        
     """Admin kiritgan ish joylarini saqlash."""
     if message.text == "/admin":
         await admin_panel(message, state)
@@ -598,6 +641,10 @@ async def admin_add_jobs_message(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "list_tumans")
 async def list_tumans(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Siz admin emassiz!")
+        return
+        
     """Mavjud barcha ish joylarini ro'yxatini ko'rsatish."""
     global vacancies
     vacancies = load_data() 
@@ -623,15 +670,12 @@ async def list_tumans(callback: types.CallbackQuery):
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
     await callback.answer()
 
-@dp.callback_query(F.data == "go_to_admin_panel")
-async def go_to_admin_panel_handler(callback: types.CallbackQuery, state: FSMContext):
-    """Admin paneliga qaytish uchun tugma ishlashi."""
-    # callback.message.edit_text uchun yangi xabar yuborish o'rniga, mavjud xabarni o'chirmasdan menyuni yangilaymiz.
-    await admin_panel(callback.message, state)
-    await callback.answer()
-    
 @dp.callback_query(F.data == "clear_tuman_jobs")
 async def clear_tuman_jobs_selection(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Siz admin emassiz!")
+        return
+        
     """Ish joylarini tozalash uchun tuman tanlash."""
     global vacancies
     vacancies = load_data()
@@ -665,6 +709,10 @@ async def clear_tuman_jobs_selection(callback: types.CallbackQuery, state: FSMCo
 
 @dp.callback_query(F.data.startswith("confirm_clear_"), Form.admin_select_tuman_to_clear)
 async def confirm_clear_tuman_jobs(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Siz admin emassiz!")
+        return
+        
     """Ish joylarini tozalashni tasdiqlash."""
     tuman = callback.data.replace("confirm_clear_", "")
     
@@ -680,6 +728,10 @@ async def confirm_clear_tuman_jobs(callback: types.CallbackQuery, state: FSMCont
 
 @dp.callback_query(F.data.startswith("do_clear_"))
 async def do_clear_tuman_jobs(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Siz admin emassiz!")
+        return
+        
     """Tanlangan tuman ish joylarini o'chirish."""
     global vacancies
     tuman = callback.data.replace("do_clear_", "")
@@ -706,5 +758,4 @@ async def do_clear_tuman_jobs(callback: types.CallbackQuery, state: FSMContext):
 
 if __name__ == "__main__":
     # Botni ishga tushirish
-    # Ishga tushirishdan oldin "config.json" mavjudligiga va token to'g'riligiga ishonch hosil qiling.
     asyncio.run(dp.start_polling(bot))
