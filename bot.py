@@ -1,11 +1,17 @@
 import asyncio
 import json
 import os
+import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from typing import List, Dict, Any, Optional
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Konfiguratsiya va Global O'zgaruvchilar ---
 
@@ -14,21 +20,17 @@ try:
     with open("config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
 except FileNotFoundError:
-    print("Xatolik: 'config.json' fayli topilmadi.")
+    logging.critical("Xatolik: 'config.json' fayli topilmadi. Botni to'xtatish.")
     exit()
 except json.JSONDecodeError:
-    print("Xatolik: 'config.json' fayli noto'g'ri formatda (JSON).")
+    logging.critical("Xatolik: 'config.json' fayli noto'g'ri formatda (JSON). Botni to'xtatish.")
+    exit()
+except KeyError as e:
+    logging.critical(f"Xatolik: 'config.json' faylida '{e}' kaliti topilmadi. Botni to'xtatish.")
     exit()
 
 API_TOKEN = config["token"]
-ADMIN_ID = config["admin_id"] # String formatda bo'lishi kerak
-
-# ADMIN_ID ni integerga o'tkazish, F.in_ filtrida foydalanish uchun
-try:
-    ADMIN_ID_INT = int(ADMIN_ID)
-except ValueError:
-    print("Xatolik: 'admin_id' qiymati config.json faylida butun son (integer) bo'lishi kerak.")
-    exit()
+ADMIN_ID = str(config["admin_id"]) # Admin ID ni string formatda saqlash tavsiya etiladi
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -38,9 +40,10 @@ dp = Dispatcher(storage=MemoryStorage())
 class Form(StatesGroup):
     waiting_for_name = State()
     waiting_for_phone = State()
-    waiting_for_diploma = State() 
-    waiting_for_reference_letter = State() 
-    waiting_for_manager_cert = State() 
+    # Hujjat State'lari
+    waiting_for_diploma = State() # 1-hujjat: Diplom nusxasi
+    waiting_for_reference_letter = State() # 2-hujjat: Ma'lumotnoma
+    waiting_for_manager_cert = State() # 3-hujjat: Menejerlik sertifikati
     waiting_for_passport_info = State()
     
     # Admin State'lari
@@ -52,16 +55,19 @@ class Form(StatesGroup):
 
 DATA_FILE = "data.json"
 
-def load_data():
+def load_data() -> Dict[str, List[str]]:
+    """Ish joylari ma'lumotlarini yuklash."""
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except json.JSONDecodeError:
+            logging.warning("DATA_FILE buzilgan. Bo'sh lug'at qaytarildi.")
             return {}
     return {}
 
-def save_data(data):
+def save_data(data: Dict[str, List[str]]):
+    """Ish joylari ma'lumotlarini saqlash."""
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
@@ -111,12 +117,12 @@ ALLOWED_MIME_TYPES = [
     'application/pdf',
     'application/zip',
     'application/x-zip-compressed',
-    'application/x-rar-compressed'
+    'application/x-rar-compressed',
+    'application/vnd.rar' # Rar uchun kengaytma
 ]
-
 # --- Umumiy Funksiyalar ---
 
-def get_back_buttons(back_callback=None):
+def get_back_buttons(back_callback: Optional[str] = None) -> List[List[InlineKeyboardButton]]:
     """Bosh sahifaga va orqaga qaytish tugmalarini yaratadi."""
     buttons = []
     if back_callback:
@@ -124,12 +130,12 @@ def get_back_buttons(back_callback=None):
     
     buttons.append(InlineKeyboardButton(text="🏠 Bosh sahifa", callback_data="go_to_start"))
     
-    return [buttons]
-    
-# Admin tekshiruvi uchun yordamchi funksiya
-def is_admin(user_id):
-    """Foydalanuvchi Admin ID ga mos kelishini tekshiradi."""
-    return str(user_id) == str(ADMIN_ID)
+    # Tugmalarni bitta qatorga joylashtiramiz, agar faqat ikkitasi bo'lsa
+    if len(buttons) <= 2:
+        return [buttons]
+    else:
+        # Asl holatda qatorlar alohida bo'ladi
+        return [[btn] for btn in buttons]
 
 
 # --- Foydalanuvchi Qo'llanmalari ---
@@ -138,8 +144,8 @@ def is_admin(user_id):
 async def start(message: types.Message, state: FSMContext):
     await state.clear()
     
-    # Admin tekshiruvi: Agar Admin bo'lsa, tezkor xabar berish
-    if is_admin(message.from_user.id):
+    # Admin tekshiruvi
+    if str(message.from_user.id) == ADMIN_ID:
         await message.answer("Salom Admin! Ish joylarini boshqarish uchun /admin yozing.")
         return
 
@@ -159,7 +165,7 @@ async def start(message: types.Message, state: FSMContext):
     keyboard_buttons = []
     row = []
     for i, tuman in enumerate(available_tumans, 1):
-        row.append(InlineKeyboardButton(text=tuman, callback_data=f"user_tuman_{tuman}"))
+        row.append(InlineKeyboardButton(text=f"🏢 {tuman} ({len(vacancies.get(tuman, []))} ta)", callback_data=f"user_tuman_{tuman}"))
         if i % 2 == 0:
             keyboard_buttons.append(row)
             row = []
@@ -173,7 +179,11 @@ async def start(message: types.Message, state: FSMContext):
 async def go_to_start_handler(callback: types.CallbackQuery, state: FSMContext):
     """Bosh sahifaga (start) qaytish."""
     # Xabarni o'chirib, yangisini yuboramiz.
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass # Xabar allaqachon o'chirilgan bo'lishi mumkin
+        
     await start(callback.message, state)
     await callback.answer()
 
@@ -185,7 +195,7 @@ async def back_to_tuman_selection(callback: types.CallbackQuery, state: FSMConte
     keyboard_buttons = []
     row = []
     for i, tuman in enumerate(available_tumans, 1):
-        row.append(InlineKeyboardButton(text=tuman, callback_data=f"user_tuman_{tuman}"))
+        row.append(InlineKeyboardButton(text=f"🏢 {tuman} ({len(vacancies.get(tuman, []))} ta)", callback_data=f"user_tuman_{tuman}"))
         if i % 2 == 0:
             keyboard_buttons.append(row)
             row = []
@@ -194,7 +204,7 @@ async def back_to_tuman_selection(callback: types.CallbackQuery, state: FSMConte
     
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     await callback.message.edit_text("👇 Bo'sh ish o'rinlari mavjud tumanni tanlang:", reply_markup=kb)
-    await state.clear()
+    await state.clear() # Faqat tuman tanlash uchun
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("user_tuman_"))
@@ -213,7 +223,7 @@ async def tuman_selected(callback: types.CallbackQuery, state: FSMContext):
     keyboard_buttons = []
     for job in jobs:
         callback_data = f"user_job_{tuman}|{job}"
-        keyboard_buttons.append([InlineKeyboardButton(text=job, callback_data=callback_data)])
+        keyboard_buttons.append([InlineKeyboardButton(text=f"💼 {job}", callback_data=callback_data)])
         
     keyboard_buttons.extend(get_back_buttons("back_to_tuman_selection"))
     
@@ -255,10 +265,9 @@ async def process_name(message: types.Message, state: FSMContext):
         
     await state.update_data(name=message.text)
     
-    # Orqaga qaytish: F.I.Sh. kiritish bosqichiga (reply tugma orqali mumkin emas, shuning uchun bosh sahifa qoldiriladi)
     kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Telefon raqamni yuborish", request_contact=True)],
+            [KeyboardButton(text="📞 Telefon raqamni yuborish", request_contact=True)],
             [KeyboardButton(text="/start")]
         ],
         resize_keyboard=True,
@@ -275,16 +284,24 @@ async def process_phone(message: types.Message, state: FSMContext):
         await start(message, state)
         return
         
-    phone = message.contact.phone_number if message.contact else message.text
+    phone = ""
+    if message.contact:
+        phone = message.contact.phone_number
+    elif message.text and len(message.text.replace(" ", "")) > 8: # Oddiy text bo'lsa raqamga o'xshashligini tekshiramiz
+        phone = message.text.replace(" ", "")
+
     if not phone:
         await message.answer("Telefon raqam aniqlanmadi. Iltimos, 'Telefon raqamni yuborish' tugmasini bosing yoki raqamni to'g'ri kiriting.")
         return
         
     await state.update_data(phone=phone)
     
+    # Reply klaviaturani yashirish
+    await message.answer("✅ Raqam qabul qilindi.", reply_markup=types.ReplyKeyboardRemove())
+    
     # Birinchi hujjatni so'rash (Diplom)
-    # Orqaga qaytish: Telefon kiritish bosqichiga
-    kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_phone"))
+    # Orqaga qaytish: F.I.Sh. kiritish bosqichiga
+    kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_name")) # Tuzatish: back_to_phone emas, back_to_name
     
     await message.answer(
         "📄 Hujjatlarni yuborish bosqichi:\n\n"
@@ -299,7 +316,7 @@ async def process_phone(message: types.Message, state: FSMContext):
 async def process_diploma(message: types.Message, state: FSMContext):
     """Diplomni qabul qilish va 2-hujjatni (Ma'lumotnoma) so'rash."""
     if not message.document or message.document.mime_type not in ALLOWED_MIME_TYPES:
-        kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_phone"))
+        kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_name"))
         allowed_extensions = ", ".join([mime.split('/')[-1] if '/' in mime else mime for mime in ALLOWED_MIME_TYPES])
         await message.answer(
             f"⚠️ **Xatolik!** Iltimos, faqat **PDF, ZIP yoki RAR** fayl (ruxsat berilgan turlar: `{allowed_extensions}`) yuboring. Boshqa turdagi ma'lumot qabul qilinmaydi.",
@@ -389,7 +406,7 @@ async def process_manager_cert(message: types.Message, state: FSMContext):
 # --- 4. Pasport ma'lumotini qabul qilish va barchasini Admin'ga yuborish ---
 @dp.message(Form.waiting_for_passport_info)
 async def process_passport(message: types.Message, state: FSMContext):
-    """Pasport ma'lumotini qabul qilish, barcha ma'lumotlarni Admin'ga MediaGroup orqali yuborish."""
+    """Pasport ma'lumotini qabul qilish, barcha ma'lumotlarni Admin'ga yuborish."""
     if message.text == "/start":
         await start(message, state)
         return
@@ -438,44 +455,77 @@ async def process_passport(message: types.Message, state: FSMContext):
     media_group[0].caption = caption
     media_group[0].parse_mode = "Markdown"
     
+    admin_success = False
     try:
         # Hamma hujjatlarni bitta MediaGroup qilib yuboramiz
         await bot.send_media_group(ADMIN_ID, media=media_group)
-        
-        # Foydalanuvchiga TASDIQLASH xabari 
+        admin_success = True
+        logging.info(f"Admin'ga MediaGroup muvaffaqiyatli yuborildi. User: {message.from_user.id}")
+    except Exception as e:
+        # Agar MediaGroup yuborishda xato bo'lsa (masalan, caption juda uzun bo'lsa), bittalab yuborishga urinish
+        logging.error(f"Admin'ga MediaGroup yuborishda xato: {e}. Bittalab yuborishga urinish...")
+        try:
+            # 1. Matnni yuborish
+            await bot.send_message(ADMIN_ID, caption, parse_mode="Markdown")
+            # 2. Hujjatlarni bittalab yuborish
+            await bot.send_document(ADMIN_ID, diploma_info["file_id"], caption="1. Diplom")
+            await bot.send_document(ADMIN_ID, reference_info["file_id"], caption="2. Ma'lumotnoma")
+            await bot.send_document(ADMIN_ID, manager_cert_info["file_id"], caption="3. Menejerlik Sertifikati")
+            admin_success = True
+            logging.info(f"Admin'ga hujjatlar bittalab yuborildi. User: {message.from_user.id}")
+        except Exception as inner_e:
+            logging.critical(f"Admin'ga xabar yuborish butunlay muvaffaqiyatsiz tugadi: {inner_e}")
+            admin_success = False
+
+    # Foydalanuvchiga tasdiqlash xabari (Admin'ga borganidan keyin)
+    if admin_success:
         await message.answer("✅ Arizangiz va hujjatlaringiz qabul qilindi! **Siz bilan 48 soat ichida admin aloqaga chiqadi.** E'tiboringiz uchun rahmat.", 
                              reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/start")]], resize_keyboard=True, one_time_keyboard=True))
         await state.clear()
-    except Exception as e:
-        # Xatolik yuz bersa, foydalanuvchiga xabar berish
-        await message.answer(f"❌ Xatolik yuz berdi. Arizani Admin'ga yuborishda muammo: {e}. Iltimos, qayta urinib ko'ring yoki admin bilan bog'laning.")
+    else:
+        # Agar admin'ga hech qanday xabar yetkazilmasa (juda kamdan-kam holat)
+        await message.answer(f"❌ Texnik xatolik yuz berdi. Arizangiz saqlanmadi. Iltimos, /start buyrug'i orqali qayta urinib ko'ring yoki admin bilan bog'laning.",
+                              reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/start")]], resize_keyboard=True, one_time_keyboard=True))
         await state.clear()
 
-
 # --- Orqaga Qaytish Funksiyalari ---
+
+# Qaytish mantiqlari to'g'rilangan
+
+@dp.callback_query(F.data == "back_to_tuman_selection")
+async def back_to_tuman_selection(callback: types.CallbackQuery, state: FSMContext):
+    """Tuman tanlash bosqichiga qaytish. (Qaytish mantiqida mavjud)"""
+    await callback.answer()
+    await state.clear()
+    await start(callback.message, state) # Startga qaytish xabarini o'z ichiga oladi
 
 @dp.callback_query(F.data == "back_to_name")
 async def back_to_name(callback: types.CallbackQuery, state: FSMContext):
     """F.I.Sh. kiritish bosqichiga qaytish."""
+    await callback.answer()
     data = await state.get_data()
-    tuman = data.get("selected_tuman")
+    tuman = data.get("selected_tuman") or data.get("current_tuman")
+    job = data.get("selected_job")
     
+    # Orqaga qaytish: Ish tanlash bosqichiga
     kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"user_tuman_{tuman}")) 
 
     await callback.message.edit_text(
+        f"Siz **{tuman}** tumanidagi **{job}** ish o'rnini tanladingiz.\n\n"
         "Iltimos, **F.I.Sh.**'ngizni to'liq kiriting:",
         reply_markup=kb,
         parse_mode="Markdown"
     )
     await state.set_state(Form.waiting_for_name)
-    await callback.answer()
 
 @dp.callback_query(F.data == "back_to_phone")
 async def back_to_phone(callback: types.CallbackQuery, state: FSMContext):
     """Telefon kiritish bosqichiga qaytish."""
+    await callback.answer()
+    
     kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Telefon raqamni yuborish", request_contact=True)],
+            [KeyboardButton(text="📞 Telefon raqamni yuborish", request_contact=True)],
             [KeyboardButton(text="/start")]
         ],
         resize_keyboard=True,
@@ -483,12 +533,13 @@ async def back_to_phone(callback: types.CallbackQuery, state: FSMContext):
     )
     await callback.message.edit_text("Endi **telefon raqamingizni** yuboring:", reply_markup=kb, parse_mode="Markdown")
     await state.set_state(Form.waiting_for_phone)
-    await callback.answer()
 
 @dp.callback_query(F.data == "back_to_diploma")
 async def back_to_diploma(callback: types.CallbackQuery, state: FSMContext):
     """Diplom kiritish bosqichiga qaytish."""
-    kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_phone"))
+    await callback.answer()
+    # Orqaga qaytish: F.I.Sh. kiritish bosqichiga
+    kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_name")) # Telefon bosqichini o'tkazib yuboramiz
 
     await callback.message.edit_text(
         "📄 Hujjatlarni yuborish bosqichi:\n\n"
@@ -497,11 +548,12 @@ async def back_to_diploma(callback: types.CallbackQuery, state: FSMContext):
         parse_mode="Markdown"
     )
     await state.set_state(Form.waiting_for_diploma)
-    await callback.answer()
 
 @dp.callback_query(F.data == "back_to_reference")
 async def back_to_reference(callback: types.CallbackQuery, state: FSMContext):
     """Ma'lumotnoma kiritish bosqichiga qaytish."""
+    await callback.answer()
+    # Orqaga qaytish: Diplom kiritish bosqichiga
     kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_diploma"))
 
     await callback.message.edit_text(
@@ -510,11 +562,12 @@ async def back_to_reference(callback: types.CallbackQuery, state: FSMContext):
         parse_mode="Markdown"
     )
     await state.set_state(Form.waiting_for_reference_letter)
-    await callback.answer()
 
 @dp.callback_query(F.data == "back_to_manager_cert")
 async def back_to_manager_cert(callback: types.CallbackQuery, state: FSMContext):
     """Menejerlik sertifikati kiritish bosqichiga qaytish."""
+    await callback.answer()
+    # Orqaga qaytish: Ma'lumotnoma kiritish bosqichiga
     kb = InlineKeyboardMarkup(inline_keyboard=get_back_buttons(f"back_to_reference"))
 
     await callback.message.edit_text(
@@ -523,14 +576,16 @@ async def back_to_manager_cert(callback: types.CallbackQuery, state: FSMContext)
         parse_mode="Markdown"
     )
     await state.set_state(Form.waiting_for_manager_cert)
-    await callback.answer()
 
+# --- Admin Panel Funksiyalari ---
 
-# --- Admin Panel Funksiyalari (Tuzatilgan) ---
-
-# /admin buyrug'ini faqat Admin uchun ishlashini ta'minlash
-@dp.message(F.text == "/admin", F.from_user.id.in_({ADMIN_ID_INT}))
+@dp.message(F.text == "/admin")
 async def admin_panel(message: types.Message, state: FSMContext):
+    """Admin panel menyusini ko'rsatish."""
+    if str(message.from_user.id) != ADMIN_ID:
+        await message.answer("Siz admin emassiz!")
+        return
+        
     await state.clear() 
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -540,39 +595,10 @@ async def admin_panel(message: types.Message, state: FSMContext):
     ])
     await message.answer("Admin paneliga xush kelibsiz:", reply_markup=kb)
 
-# Admin bo'lmagan shaxs /admin deb yozsa
-@dp.message(F.text == "/admin", ~F.from_user.id.in_({ADMIN_ID_INT}))
-async def not_admin_handler(message: types.Message):
-    await message.answer("Siz admin emassiz!")
-
-
-# go_to_admin_panel_handler callback funksiyasini to'g'rilash
-@dp.callback_query(F.data == "go_to_admin_panel")
-async def go_to_admin_panel_handler(callback: types.CallbackQuery, state: FSMContext):
-    # Callback orqali kelganda Admin ekanligini tekshirish
-    if not is_admin(callback.from_user.id):
-        await callback.answer("Siz admin emassiz!")
-        return
-
-    # Admin bo'lsa, xabarni o'zgartirib Admin paneliga o'tamiz
-    await state.clear() 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Ish joy qo'shish", callback_data="add_job")],
-        [InlineKeyboardButton(text="📜 Mavjud ish joylari ro'yxati", callback_data="list_tumans")],
-        [InlineKeyboardButton(text="🗑️ Tuman ish joylarini tozalash", callback_data="clear_tuman_jobs")] 
-    ])
-    
-    # Xabarni edit qilamiz
-    await callback.message.edit_text("Admin paneliga xush kelibsiz:", reply_markup=kb)
-    await callback.answer()
-
 @dp.callback_query(F.data == "add_job")
 async def add_job(callback: types.CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("Siz admin emassiz!")
-        return
-        
     """Ish joyi qo'shish uchun tumanni tanlash."""
+    await callback.answer()
     keyboard_buttons = []
     row = []
     for i, tuman in enumerate(all_tumans, 1):
@@ -587,15 +613,11 @@ async def add_job(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     await callback.message.edit_text("Ish joyi qo'shmoqchi bo'lgan tumanni tanlang:", reply_markup=kb)
     await state.set_state(Form.admin_select_tuman)
-    await callback.answer()
 
-@dp.callback_query(F.data.startswith("admin_tuman_"))
+@dp.callback_query(F.data.startswith("admin_tuman_"), Form.admin_select_tuman)
 async def admin_tuman_selected(callback: types.CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("Siz admin emassiz!")
-        return
-        
     """Tuman tanlanganda ish joyi nomini kiritishni so'rash."""
+    await callback.answer()
     tuman = callback.data.replace("admin_tuman_", "")
     await state.update_data(tuman=tuman)
     
@@ -605,14 +627,9 @@ async def admin_tuman_selected(callback: types.CallbackQuery, state: FSMContext)
     await callback.message.edit_text(f"**{tuman}** tumaniga qo'shiladigan **har bir** bog‘cha nomini **alohida SMS** qilib kiriting! (masalan: `2-DMTT` yoki `bosh o'qituvchi`)\n\n"
                                      "Barcha ish joylarini kiritib bo'lgach, /admin buyrug'ini yozing.", reply_markup=kb, parse_mode="Markdown")
     await state.set_state(Form.admin_add_jobs)
-    await callback.answer()
 
 @dp.message(Form.admin_add_jobs)
 async def admin_add_jobs_message(message: types.Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await message.answer("Siz admin emassiz!")
-        return
-        
     """Admin kiritgan ish joylarini saqlash."""
     if message.text == "/admin":
         await admin_panel(message, state)
@@ -642,11 +659,8 @@ async def admin_add_jobs_message(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "list_tumans")
 async def list_tumans(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("Siz admin emassiz!")
-        return
-        
     """Mavjud barcha ish joylarini ro'yxatini ko'rsatish."""
+    await callback.answer()
     global vacancies
     vacancies = load_data() 
 
@@ -658,7 +672,6 @@ async def list_tumans(callback: types.CallbackQuery):
         for tuman in all_tumans:
             jobs = vacancies.get(tuman)
             if jobs:
-                # Ish joylarini alifbo tartibida saralash
                 jobs_list = "\n * " + "\n * ".join(sorted(jobs))
                 text += f"**{tuman}** ({len(jobs)} ta):{jobs_list}\n"
             else:
@@ -669,15 +682,17 @@ async def list_tumans(callback: types.CallbackQuery):
     ])
     
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
-    await callback.answer()
 
+@dp.callback_query(F.data == "go_to_admin_panel")
+async def go_to_admin_panel_handler(callback: types.CallbackQuery, state: FSMContext):
+    """Admin paneliga qaytish uchun tugma ishlashi."""
+    await callback.answer()
+    await admin_panel(callback.message, state)
+    
 @dp.callback_query(F.data == "clear_tuman_jobs")
 async def clear_tuman_jobs_selection(callback: types.CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("Siz admin emassiz!")
-        return
-        
     """Ish joylarini tozalash uchun tuman tanlash."""
+    await callback.answer()
     global vacancies
     vacancies = load_data()
     
@@ -688,7 +703,6 @@ async def clear_tuman_jobs_selection(callback: types.CallbackQuery, state: FSMCo
             [InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="go_to_admin_panel")]
         ])
         await callback.message.edit_text("Hozircha hech qaysi tumanda ish joylari mavjud emas. Tozalash uchun ma'lumot yo'q.", reply_markup=kb)
-        await callback.answer()
         return
 
     keyboard_buttons = []
@@ -706,15 +720,11 @@ async def clear_tuman_jobs_selection(callback: types.CallbackQuery, state: FSMCo
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     await callback.message.edit_text("Ish joylarini tozalash (o'chirish) uchun tumanni tanlang:", reply_markup=kb)
     await state.set_state(Form.admin_select_tuman_to_clear) 
-    await callback.answer()
 
 @dp.callback_query(F.data.startswith("confirm_clear_"), Form.admin_select_tuman_to_clear)
 async def confirm_clear_tuman_jobs(callback: types.CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("Siz admin emassiz!")
-        return
-        
     """Ish joylarini tozalashni tasdiqlash."""
+    await callback.answer()
     tuman = callback.data.replace("confirm_clear_", "")
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -724,16 +734,12 @@ async def confirm_clear_tuman_jobs(callback: types.CallbackQuery, state: FSMCont
 
     await callback.message.edit_text(f"⚠️ **DIQQAT!** Siz **{tuman}** tumanidagi barcha ({len(vacancies.get(tuman, []))} ta) ish joylarini **butunlay o'chirmoqchisiz**.\n\n"
                                      "Tasdiqlaysizmi?", reply_markup=kb, parse_mode="Markdown")
-    await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("do_clear_"))
 async def do_clear_tuman_jobs(callback: types.CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("Siz admin emassiz!")
-        return
-        
     """Tanlangan tuman ish joylarini o'chirish."""
+    await callback.answer()
     global vacancies
     tuman = callback.data.replace("do_clear_", "")
 
@@ -754,10 +760,14 @@ async def do_clear_tuman_jobs(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text(f"⚠️ **{tuman}** tumanida tozalash uchun ish joylari topilmadi.", reply_markup=kb, parse_mode="Markdown")
 
     await state.clear()
-    await callback.answer()
 
 
 if __name__ == "__main__":
-    # Botni ishga tushirish (Long Polling rejimida)
-    # Serverda bot doimiy ishlashi uchun uni 'screen' yoki 'tmux' ostida ishlatishingiz kerak.
-    asyncio.run(dp.start_polling(bot))
+    # Botni ishga tushirish
+    try:
+        logging.info("Bot ishga tushirilmoqda...")
+        asyncio.run(dp.start_polling(bot))
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot qo'lda to'xtatildi.")
+    except Exception as e:
+        logging.critical(f"Kritik xato yuz berdi: {e}")
